@@ -21,18 +21,24 @@ locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
 # Log to the screen.
 handler = logging.StreamHandler()
 log = logging.getLogger()
-parser = argparse.ArgumentParser()
 
 handler.setFormatter(logging.Formatter('%(asctime)s: "%(name)s" (line: %(lineno)d) - %(levelname)s %(message)s'))
 log.setLevel(logging.INFO)
 log.addHandler(handler)
 
-def get_arguments(parser):
+def get_arguments():
+    parser = argparse.ArgumentParser()
     parser.add_argument(
         '--csv',
         dest='csv',
         action='store_true',
         help='Output to CSV.'
+    )
+    parser.add_argument(
+        '--uris', '-u',
+        dest='uris',
+        nargs='+',
+        help='The track (or artist) URIs to use as the seed.'
     )
     parser.add_argument(
         '--quiet', '-q',
@@ -108,6 +114,30 @@ class Spotify():
         self.playlist = self.return_playlist()
 
 
+    def return_playlist(self):
+        """Create the 'recommendations' playlist if it doesn't exist and select it if it does."""
+        log.debug('Populating user playlists.')
+
+        for playlist in self.client.current_user_playlists()['items']:
+            if playlist['name'] == 'Recommendations':
+                log.debug("Found 'recommendations' playlist.")
+
+                recommendations_playlist = playlist
+
+                break
+
+        else:
+            log.debug("Creating 'recommendations playlist.")
+
+            recommendations_playlist = self.client.user_playlist_create(
+                self.user['id'],
+                'Recommendations',
+                description='Procedurally generated playlist of recommended tracks.'
+            )
+
+        return recommendations_playlist
+
+
     def get_recommendations(self, args, limit: int = 100, country: str = 'US'):
         """Populate artist/track seeds for Spotify's recommendations API."""
         seed_artists = list()
@@ -117,21 +147,24 @@ class Spotify():
 
         log.info('Getting track recommendations.')
 
-        if 'artists' in args.seed:
-            top_artists = [artist for artist in self.client.current_user_top_artists(
-                time_range=args.time_range
-            )['items']]
-
-        if 'tracks' in args.seed:
-            top_tracks = [track for track in self.client.current_user_top_tracks(
-                time_range=args.time_range
-            )['items']]
-
-        if args.random:
-            seed_uris = random.sample([seed['uri'] for seed in top_artists + top_tracks], 5)
+        if args.uris:
+            seed_uris = args.uris
         else:
-            sorted_seeds = sorted(top_artists + top_tracks, key=lambda d: d['popularity'])
-            seed_uris = [seed['uri'] for seed in sorted_seeds[:5]]
+            if 'artists' in args.seed:
+                top_artists = [artist for artist in self.client.current_user_top_artists(
+                    time_range=args.time_range
+                )['items']]
+
+            if 'tracks' in args.seed:
+                top_tracks = [track for track in self.client.current_user_top_tracks(
+                    time_range=args.time_range
+                )['items']]
+
+            if args.random:
+                seed_uris = random.sample([seed['uri'] for seed in top_artists + top_tracks], 5)
+            else:
+                sorted_seeds = sorted(top_artists + top_tracks, key=lambda d: d['popularity'])
+                seed_uris = [seed['uri'] for seed in sorted_seeds[:5]]
 
         for seed in seed_uris:
             if 'artist' in seed:
@@ -151,46 +184,21 @@ class Spotify():
         return recommendations
 
 
-    def return_playlist(self):
-        """Create the 'recommendations' playlist if it doesn't exist and select it if it does."""
-        log.debug('Populating user playlists.')
-
-        for playlist in self.client.current_user_playlists()['items']:
-            if playlist['name'] == 'Recommendations':
-                log.debug("Found 'recommendations' playlist.")
-
-                recommendations_playlist = playlist
-
-                break
-
-            else:
-                log.debug("Creating 'recommendations playlist.")
-
-                recommendations_playlist = self.client.user_playlist_create(
-                    self.user['id'],
-                    'Recommendations',
-                    description='Procedurally generated playlist of recommended tracks.'
-                )
-
-        return recommendations_playlist
-
-
 if __name__ == '__main__':
-    args = get_arguments(parser)
+    args = get_arguments()
     scope = 'user-top-read user-read-private user-read-recently-played playlist-modify-private playlist-modify-public'
     spotify = Spotify(scope)
     recommendations = construct_playlist_dict(spotify.get_recommendations(args))
+    tracks = [track['uri'] for track in recommendations]
 
     log.info('Adding recommendations to playlist.')
+
     if args.csv:
         print(list_to_csv(recommendations))
-        exit()
-    else:
-        print(pp(recommendations))
 
     if not args.quiet:
         spotify.client.user_playlist_add_tracks(
             spotify.user['id'],
             spotify.playlist['id'],
-            [track['uri'] for track in recommendations]
+            tracks
         )
