@@ -12,7 +12,6 @@ import io
 import locale
 import logging
 import random
-from pprint import pp
 import spotipy
 
 # Set locale.
